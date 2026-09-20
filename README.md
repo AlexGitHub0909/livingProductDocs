@@ -13,18 +13,47 @@ Skill 会先按端到端流程核对业务事实，再按页面、API、命令�
 
 它不要求项目采用固定目录或技术架构。执行时先识别仓库、应用和运行边界，再按项目自己的入口、业务编排、数据结构、测试和文档位置建立证据映射。
 
-交付采用阶段门禁：范围、项目发现、证据链、文档生成、跨文档核对和最终检查依次通过后，才能标记为 `FINAL_COMPLETE`。证据不足时输出可继续执行的 `EVIDENCE_BLOCKED` 包，不用推测补齐终稿。
+Skill 会依次确认范围、项目结构、证据链、文档内容和跨文档一致性。全部检查通过后，结果才会标记为 `FINAL_COMPLETE`。证据不足时会返回 `EVIDENCE_BLOCKED`，说明缺少什么、影响哪些结论，以及补齐证据后从哪里继续。
 
 ## 安装
 
 按照 [OpenAI Skills 文档](https://developers.openai.com/zh-Hans/docs/build-skills) 的目录约定，可将本仓库内容放到以下任一位置：
 
-- 个人安装：`$HOME/.agents/skills/living-product-docs/`
-- 项目安装：`<project>/.agents/skills/living-product-docs/`
+- Codex 个人安装：`${CODEX_HOME:-$HOME/.codex}/skills/living-product-docs/`
+- 通用个人安装：`$HOME/.agents/skills/living-product-docs/`
+- 项目内安装：`<project>/.agents/skills/living-product-docs/`
 
-也可以在 Codex 中让 `skill-installer` 从本 GitHub 仓库安装。安装后重新启动相关客户端或开启新会话，使 Skill 列表重新加载。
+Codex 个人安装示例：
 
-## 使用
+```bash
+skill_root="${CODEX_HOME:-$HOME/.codex}/skills"
+mkdir -p "$skill_root"
+git clone https://github.com/AlexGitHub0909/livingProductDocs.git \
+  "$skill_root/living-product-docs"
+```
+
+也可以在 Codex 中让 `skill-installer` 从本 GitHub 仓库安装。不同客户端支持的安装目录可能不同，使用前以该客户端的 Skill 说明为准。安装后重新启动客户端或开启新会话，让 Skill 列表重新加载。
+
+## 第一次使用
+
+一般不需要手动运行仓库里的脚本。在目标项目中打开 Codex，然后说明本次范围、比较基线和需要交付的文档。例如：
+
+```text
+使用 $living-product-docs，以 DELTA_SYNC 模式更新结算流程文档。
+比较基线为 origin/main，需要更新产品需求、测试用例和数据字典；不要同步远程知识库。
+```
+
+如果没有指定工作模式，Skill 会根据现有文档和近期变更选择 `BASELINE` 或 `DELTA_SYNC`。没有指定文档目录时，它会先查找项目中承担相同职责的文件，不会默认再建一套文档。
+
+任务结束时检查最终状态：
+
+- `FINAL_COMPLETE`：本次范围内的终稿和检查均已完成；
+- `AUDIT_COMPLETE`：只执行了审查，没有修改文档；
+- `EVIDENCE_BLOCKED`：存在影响终稿的证据缺口，结果中会列出恢复条件。
+
+Git 提交、远端推送、知识库同步和发布是不同操作。除非用户分别授权，否则 Skill 不会自动执行。
+
+## 常用调用方式
 
 在任务中明确调用：
 
@@ -38,11 +67,11 @@ Skill 会先按端到端流程核对业务事实，再按页面、API、命令�
 使用 $living-product-docs 以 AUDIT 模式检查当前文档，列出与实现不一致的内容和缺失证据。
 ```
 
-## 辅助扫描器
+## 辅助工具
 
-仓库包含三个只依赖 Python 标准库的辅助工具。
+仓库包含三个只依赖 Python 标准库的工具。日常通过 Skill 工作时由执行者按需调用；维护 Skill 或排查扫描结果时也可以单独运行。
 
-首次进入陌生项目，先发现仓库、manifest、运行单元和证据候选：
+首次进入陌生项目，先发现仓库、manifest、应用或服务边界以及证据候选：
 
 ```bash
 python3 scripts/discover_project.py /path/to/project --format json
@@ -54,7 +83,7 @@ python3 scripts/discover_project.py /path/to/project --format json
 python3 scripts/audit_docs.py /path/to/project --base origin/main
 ```
 
-可使用 `--format json` 输出结构化结果，或使用 `--strict` 在发现结构性同步警告时返回非零状态。
+将 `origin/main` 替换为项目实际使用的基线。可使用 `--format json` 输出结构化结果，或使用 `--strict` 在发现结构性同步警告时返回非零状态。
 
 自定义目录或架构可通过 JSON 配置覆盖默认启发式：
 
@@ -74,7 +103,7 @@ python3 scripts/validate_delivery.py /path/to/delivery-manifest.json --project /
 
 详细阶段、清单字段和阻塞输出见 [稳定交付阶段与门禁](references/delivery-gates.md)。
 
-扫描器只负责识别证据候选和可能遗漏，不能证明文档已经完整。最终结论仍需结合项目规则、业务流程、页面行为、数据约束和实际测试结果人工核对。
+这些工具只负责发现证据候选、同步缺口和清单错误，不能判断业务内容是否真实完整。最终结论仍需结合项目规则、业务流程、实际入口、数据约束和本次测试结果审阅。
 
 ## 工作模式
 
@@ -82,11 +111,5 @@ python3 scripts/validate_delivery.py /path/to/delivery-manifest.json --project /
 - `DELTA_SYNC`：根据近期迭代同步受影响文档；
 - `AUDIT`：只审查事实和完整性；
 - `FOCUSED_UPDATE`：维护指定文档或业务范围。
-
-最终状态：
-
-- `FINAL_COMPLETE`：指定范围内终稿和检查全部通过；
-- `AUDIT_COMPLETE`：审查任务已完成；
-- `EVIDENCE_BLOCKED`：缺少关键证据，已给出缺口和恢复条件。
 
 完整执行规则见 [SKILL.md](SKILL.md)。

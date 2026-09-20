@@ -89,14 +89,14 @@
 
 ## 阶段 6：FINAL_GATE
 
-创建临时 JSON 交付清单并运行 `validate_delivery.py`。示例：
+创建临时 JSON 交付清单并运行 `validate_delivery.py`。下面的路径和基线只是格式示例，实际使用时必须替换为当前项目中的真实值：
 
 ```json
 {
   "status": "FINAL_COMPLETE",
   "scope": {
     "statement": "当前版本指定产品范围的交付文档",
-    "baseline": "commit-or-release-reference",
+    "baseline": "commit:0123456789abcdef",
     "roots": ["."],
     "included": ["用户确认的业务流程和入口"],
     "excluded": [],
@@ -108,13 +108,13 @@
     ]
   },
   "coverage": {
-    "topology": {"status": "PASS", "evidence": ["project discovery report"]},
-    "product_intent": {"status": "PASS", "evidence": ["approved decisions"]},
-    "flows": {"status": "PASS", "evidence": ["flow evidence map"]},
-    "interfaces": {"status": "PASS", "evidence": ["entry inventory"]},
-    "data": {"status": "PASS", "evidence": ["schema review"]},
-    "tests": {"status": "PASS", "evidence": ["test matrix and fresh results"]},
-    "existing_documents": {"status": "PASS", "evidence": ["document inventory"]}
+    "topology": {"status": "PASS", "evidence": ["file: path/to/discovery-report.json"]},
+    "product_intent": {"status": "PASS", "evidence": ["file: path/to/approved-product-decision.md"]},
+    "flows": {"status": "PASS", "evidence": ["file: path/to/flow-evidence-map.md"]},
+    "interfaces": {"status": "PASS", "evidence": ["file: path/to/entry-inventory.md"]},
+    "data": {"status": "PASS", "evidence": ["file: path/to/current-schema.sql"]},
+    "tests": {"status": "PASS", "evidence": ["command: project-test-command (passed on YYYY-MM-DD)"]},
+    "existing_documents": {"status": "PASS", "evidence": ["file: path/to/document-index.md"]}
   },
   "deliverables": [
     {
@@ -179,7 +179,7 @@
 
 覆盖维度没有界面、数据或其它适用对象时，可以使用 `NOT_APPLICABLE`，但必须给出 `reason`。不能用 `NOT_APPLICABLE` 隐藏尚未检查或无法访问的范围。
 
-`evidence` 必须写实际文件、提交、决策记录、检查命令或执行结果，不能使用“已审查”“已确认”这类不可复核的占位文本。`contract_checks` 使用示例中的固定键，且请求交付物对应的检查必须全部为 `PASS`。脚本负责校验清单结构、文件存在和门禁状态；内容判断仍必须来自对实际证据的审阅，不能把自填清单当成证据本身。
+`evidence` 必须写实际文件、提交、决策记录、检查命令或执行结果。复制示例时要替换所有 `path/to/*`、示例提交和日期，不能保留占位值，也不能使用“已审查”“已确认”这类不可复核的文字。`contract_checks` 使用示例中的固定键，且请求交付物对应的检查必须全部为 `PASS`。脚本负责校验清单结构、文件存在和门禁状态；内容判断仍必须来自对实际证据的审阅，不能把自填清单当成证据本身。
 
 ## 失败时的稳定输出
 
