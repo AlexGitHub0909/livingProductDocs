@@ -1,6 +1,6 @@
 ---
 name: living-product-docs
-description: Reconcile and maintain product delivery documentation from current project evidence, including product requirements, test cases, data dictionaries, and user or operations manuals. Use when documentation must be created, audited, or updated after product changes; do not use for generic prose editing or code-only tasks with no documentation scope.
+description: Build, reconcile, and quality-gate product delivery documentation from current project evidence, including product requirements, test cases, data dictionaries, and user or operations manuals. Use when documentation must be created, audited, or updated after product changes; do not use for generic prose editing or code-only tasks with no documentation scope.
 ---
 
 # 产品事实文档管家
@@ -26,7 +26,8 @@ description: Reconcile and maintain product delivery documentation from current 
 - 只更新本次范围内的文档和必要索引；不顺带改代码、发布、部署或写入远程协作系统。
 - 远程文档、知识库和表格只有在用户明确要求时才同步。同步成功必须回读验证，不能用“已尝试”代替“已同步”。
 - 不因缺少某类文档就机械创建文件。先查找项目中承担同等职责的现有文件。
-- 不声称“完整”除非已经按业务流程和页面两个方向核对，并明确未验证边界。
+- 不声称“完整”除非已经按业务流程和适用入口两个方向核对，并明确未验证边界。
+- “完整”只表示用户确认范围内证据闭环、文档齐全且门禁通过，不表示整个组织或不可访问系统均已覆盖。
 
 ## 选择工作模式
 
@@ -38,6 +39,23 @@ description: Reconcile and maintain product delivery documentation from current 
 - `FOCUSED_UPDATE`：只维护用户指定的一类文档或一个业务范围。
 
 如果用户未指定，已有文档和近期变更同时存在时默认使用 `DELTA_SYNC`；缺少可信基线时使用 `BASELINE`。
+
+## 强制阶段门禁
+
+创建或更新交付文档时，按 [delivery-gates.md](references/delivery-gates.md) 执行，不得因为目录陌生直接进入写作：
+
+1. `SCOPE`：确认模式、业务范围、仓库边界、目标读者、交付物和基准版本；
+2. `DISCOVERY`：识别项目拓扑、运行入口、业务编排、数据、测试和现有文档；
+3. `EVIDENCE`：逐流程建立“目标 → 入口 → 实现 → 数据 → 测试 → 文档”证据链；
+4. `DRAFT`：沿用项目结构生成或更新请求的文档，并维护版本记录；
+5. `RECONCILE`：核对不同文档之间的状态、字段、权限、异常和验收标准；
+6. `FINAL_GATE`：运行确定性交付检查，只有通过后才使用 `FINAL_COMPLETE`。
+
+阶段结果只有三种：
+
+- `FINAL_COMPLETE`：用户要求范围内的终稿和检查全部通过；
+- `AUDIT_COMPLETE`：用户只要求审查，已完成覆盖核对并列出证据和问题；
+- `EVIDENCE_BLOCKED`：关键事实缺失、冲突或不可访问，只交付已确认内容、缺口和最少必要问题，不伪造终稿。
 
 ## 恢复项目上下文
 
@@ -62,6 +80,14 @@ description: Reconcile and maintain product delivery documentation from current 
 
 读取 [evidence-model.md](references/evidence-model.md) 建立事实等级和状态标签。需要判断各类文档是否达到交付深度时读取 [document-contracts.md](references/document-contracts.md)。
 
+陌生项目先运行拓扑发现器：
+
+```bash
+python3 /path/to/living-product-docs/scripts/discover_project.py /path/to/project --format json
+```
+
+输出只是候选。至少抽样追踪每个范围内运行单元的一条真实入口，确认 manifest、注册关系和调用链后，才能通过 `DISCOVERY`。非标准结构可向发现器和审计器传入同一个 `--config`。
+
 可以先运行项目扫描器生成线索：
 
 ```bash
@@ -84,6 +110,8 @@ python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --ba
 - 已新增或失效的测试证据。
 
 把每项变化映射到可能受影响的文档，不要按文件名猜测影响范围。
+
+同时建立任务级证据清单。对每个范围内流程记录产品目标、角色、入口、实现、数据或状态结果、异常、权限、测试、现有文档和证据状态。缺少产品意图时可以生成“当前实现说明”，但不能把代码行为反推为已批准产品目标。
 
 ### 2. 先按流程梳理
 
@@ -140,6 +168,18 @@ python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --ba
 - 同一术语、状态和动作在不同文档中是否一致；
 - 版本记录、正文和实际变更是否一致。
 
+### 7. 执行最终交付门禁
+
+按照 [delivery-gates.md](references/delivery-gates.md) 创建临时交付清单，运行：
+
+```bash
+python3 /path/to/living-product-docs/scripts/validate_delivery.py \
+  /path/to/delivery-manifest.json \
+  --project /path/to/project
+```
+
+返回码为 `0` 才能标记 `FINAL_COMPLETE`。可以修复的问题继续修复；关键事实缺失时改为 `EVIDENCE_BLOCKED`，列出影响、已查证位置和需要用户确认的最少问题。交付清单默认是临时验证产物，不在项目中创建新的长期事实源。
+
 ## 完成门槛
 
 交付前至少确认：
@@ -153,6 +193,7 @@ python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --ba
 - 本地更新、Git 提交、远端同步和发布状态分别陈述，没有混为一谈；
 - 所有自动检查和人工检查均记录实际结果，未执行的检查明确列出。
 - 扫描出现目录读取错误、仓库不可访问或其它证据缺口时，结论标记为不完整，不得以已有扫描结果声明全量覆盖。
+- `FINAL_COMPLETE` 已通过交付清单检查，且检查是在当前工作区最新修改后重新执行。
 
 ## 交付说明
 
@@ -165,5 +206,6 @@ python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --ba
 - 仍为 `PARTIAL`、`PLANNED`、`UNKNOWN` 或 `BLOCKED` 的内容；
 - 已执行的检查及结果；
 - Git、远程文档和发布状态。
+- 最终状态：`FINAL_COMPLETE`、`AUDIT_COMPLETE` 或 `EVIDENCE_BLOCKED`。
 
 不要用“文档已完善”作为结论。说明完善到什么范围、依据什么证据、还有什么没有完成。

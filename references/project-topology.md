@@ -58,7 +58,7 @@
 
 ## 扫描器配置
 
-扫描器接受可选 JSON 配置。路径相对于被扫描项目根目录匹配，大小写不敏感。
+`discover_project.py` 和 `audit_docs.py` 接受同一份可选 JSON 配置。路径相对于被扫描项目根目录匹配，大小写不敏感。
 
 ```json
 {
@@ -84,6 +84,10 @@
 执行：
 
 ```bash
+python3 scripts/discover_project.py /path/to/project \
+  --config /path/to/topology.json \
+  --format json
+
 python3 scripts/audit_docs.py /path/to/project \
   --base origin/main \
   --config /path/to/topology.json

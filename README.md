@@ -13,6 +13,8 @@ Skill 会先按端到端流程核对业务事实，再按页面、API、命令�
 
 它不要求项目采用固定目录或技术架构。执行时先识别仓库、应用和运行边界，再按项目自己的入口、业务编排、数据结构、测试和文档位置建立证据映射。
 
+交付采用阶段门禁：范围、项目发现、证据链、文档生成、跨文档核对和最终检查依次通过后，才能标记为 `FINAL_COMPLETE`。证据不足时输出可继续执行的 `EVIDENCE_BLOCKED` 包，不用推测补齐终稿。
+
 ## 安装
 
 按照 [OpenAI Skills 文档](https://developers.openai.com/zh-Hans/docs/build-skills) 的目录约定，可将本仓库内容放到以下任一位置：
@@ -38,7 +40,15 @@ Skill 会先按端到端流程核对业务事实，再按页面、API、命令�
 
 ## 辅助扫描器
 
-仓库包含一个只依赖 Python 标准库的证据扫描器：
+仓库包含三个只依赖 Python 标准库的辅助工具。
+
+首次进入陌生项目，先发现仓库、manifest、运行单元和证据候选：
+
+```bash
+python3 scripts/discover_project.py /path/to/project --format json
+```
+
+再检查变更与文档同步缺口：
 
 ```bash
 python3 scripts/audit_docs.py /path/to/project --base origin/main
@@ -56,6 +66,14 @@ python3 scripts/audit_docs.py /path/to/project \
 
 配置可以关闭默认目录判断，并为界面、接口、业务逻辑、数据结构、测试和各类文档指定项目自己的匹配模式。详细格式见 [项目拓扑与证据映射](references/project-topology.md)。
 
+终稿完成后，使用临时交付清单执行门禁：
+
+```bash
+python3 scripts/validate_delivery.py /path/to/delivery-manifest.json --project /path/to/project
+```
+
+详细阶段、清单字段和阻塞输出见 [稳定交付阶段与门禁](references/delivery-gates.md)。
+
 扫描器只负责识别证据候选和可能遗漏，不能证明文档已经完整。最终结论仍需结合项目规则、业务流程、页面行为、数据约束和实际测试结果人工核对。
 
 ## 工作模式
@@ -64,5 +82,11 @@ python3 scripts/audit_docs.py /path/to/project \
 - `DELTA_SYNC`：根据近期迭代同步受影响文档；
 - `AUDIT`：只审查事实和完整性；
 - `FOCUSED_UPDATE`：维护指定文档或业务范围。
+
+最终状态：
+
+- `FINAL_COMPLETE`：指定范围内终稿和检查全部通过；
+- `AUDIT_COMPLETE`：审查任务已完成；
+- `EVIDENCE_BLOCKED`：缺少关键证据，已给出缺口和恢复条件。
 
 完整执行规则见 [SKILL.md](SKILL.md)。
