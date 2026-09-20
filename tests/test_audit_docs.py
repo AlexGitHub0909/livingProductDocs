@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,110 @@ class AuditDocsTest(unittest.TestCase):
             self.assertEqual([], report["changed_files"])
             self.assertIn("product_docs", report["inventory"])
             self.assertIsNone(report["git"]["head"])
+
+    def test_custom_patterns_support_nonstandard_project_topology(self) -> None:
+        config = {
+            "use_default_heuristics": False,
+            "category_patterns": {
+                "interface": ["modules/storefront/templates/**"],
+                "api": ["modules/gateway/contracts/**"],
+            },
+        }
+
+        template_categories = audit_docs.classify(
+            "modules/storefront/templates/checkout.html",
+            config,
+        )
+        contract_categories = audit_docs.classify(
+            "modules/gateway/contracts/orders.proto",
+            config,
+        )
+
+        self.assertIn("interface", template_categories)
+        self.assertIn("api", contract_categories)
+        self.assertNotIn("behavior", template_categories)
+
+    def test_audit_can_ignore_project_specific_generated_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            source = project / "capabilities" / "checkout" / "workflow.custom"
+            source.parent.mkdir(parents=True)
+            source.write_text("workflow", encoding="utf-8")
+            generated = project / "generated-client" / "screen.tsx"
+            generated.parent.mkdir(parents=True)
+            generated.write_text("generated", encoding="utf-8")
+            config = {
+                "use_default_heuristics": False,
+                "ignore_patterns": ["generated-client/**"],
+                "category_patterns": {
+                    "behavior": ["capabilities/**/workflow.custom"],
+                },
+            }
+
+            report = audit_docs.audit(project, None, config)
+
+            self.assertEqual(["capabilities/checkout/workflow.custom"], report["inventory"]["behavior"])
+            self.assertNotIn("generated-client/screen.tsx", report["inventory"].get("interface", []))
+
+    def test_project_can_disable_default_directory_ignores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            first_party_source = project / "vendor" / "portal" / "screen.tsx"
+            first_party_source.parent.mkdir(parents=True)
+            first_party_source.write_text("export default function Screen() { return null }\n", encoding="utf-8")
+
+            report = audit_docs.audit(
+                project,
+                None,
+                {"use_default_ignores": False},
+            )
+
+            self.assertIn("vendor/portal/screen.tsx", report["inventory"]["interface"])
+
+    def test_rejects_unknown_configuration_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "audit.json"
+            config_path.write_text(
+                '{"category_patterns": {"imaginary": ["modules/**"]}}',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unknown category"):
+                audit_docs.load_config(config_path)
+
+    def test_cli_applies_custom_topology_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            project = workspace / "project"
+            source = project / "modules" / "gateway" / "contracts" / "orders.proto"
+            source.parent.mkdir(parents=True)
+            source.write_text("service Orders {}\n", encoding="utf-8")
+            config_path = workspace / "topology.json"
+            config_path.write_text(
+                '{"use_default_heuristics": false, '
+                '"category_patterns": {"api": ["modules/gateway/contracts/**"]}}',
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(project),
+                    "--config",
+                    str(config_path),
+                    "--format",
+                    "json",
+                ],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            report = json.loads(completed.stdout)
+
+            self.assertFalse(report["configuration"]["use_default_heuristics"])
+            self.assertEqual(["modules/gateway/contracts/orders.proto"], report["inventory"]["api"])
 
 
 if __name__ == "__main__":

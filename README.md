@@ -11,6 +11,8 @@
 
 Skill 会先按端到端流程核对业务事实，再按页面、API、命令、任务或事件入口查漏。它区分目标、当前实现、验证证据和外部事实，不把计划或推测写成已完成能力。
 
+它不要求项目采用固定目录或技术架构。执行时先识别仓库、应用和运行边界，再按项目自己的入口、业务编排、数据结构、测试和文档位置建立证据映射。
+
 ## 安装
 
 按照 [OpenAI Skills 文档](https://developers.openai.com/zh-Hans/docs/build-skills) 的目录约定，可将本仓库内容放到以下任一位置：
@@ -43,6 +45,16 @@ python3 scripts/audit_docs.py /path/to/project --base origin/main
 ```
 
 可使用 `--format json` 输出结构化结果，或使用 `--strict` 在发现结构性同步警告时返回非零状态。
+
+自定义目录或架构可通过 JSON 配置覆盖默认启发式：
+
+```bash
+python3 scripts/audit_docs.py /path/to/project \
+  --base origin/main \
+  --config /path/to/topology.json
+```
+
+配置可以关闭默认目录判断，并为界面、接口、业务逻辑、数据结构、测试和各类文档指定项目自己的匹配模式。详细格式见 [项目拓扑与证据映射](references/project-topology.md)。
 
 扫描器只负责识别证据候选和可能遗漏，不能证明文档已经完整。最终结论仍需结合项目规则、业务流程、页面行为、数据约束和实际测试结果人工核对。
 

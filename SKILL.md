@@ -41,7 +41,17 @@ description: Reconcile and maintain product delivery documentation from current 
 
 ## 恢复项目上下文
 
-先读取项目规则和事实入口，通常包括：
+不要预设 `frontend/`、`backend/`、`src/`、`docs/` 等目录一定存在，也不要把目录名称直接等同于架构职责。第一次进入项目、项目结构陌生、存在多个应用或仓库边界时，先读取 [project-topology.md](references/project-topology.md)，建立本次任务使用的项目拓扑与证据映射。
+
+至少先确认：
+
+- 当前工作区包含一个仓库、单仓多应用，还是多个独立仓库；
+- 哪些 manifest、workspace、构建、部署或运行配置定义真实模块边界；
+- 各运行单元的入口、路由或协议注册、业务编排、持久化、测试和文档分别在哪里；
+- 哪些目录是生成物、镜像、归档、第三方代码或无关样例，应排除在事实判断之外；
+- 当前能访问和不能访问的组件，避免把未读取的仓库判断为“没有实现”。
+
+随后读取项目规则和事实入口，通常包括：
 
 1. Git 状态、分支、远端和近期提交；
 2. 根级与目录级执行规则；
@@ -58,7 +68,7 @@ description: Reconcile and maintain product delivery documentation from current 
 python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --base origin/main
 ```
 
-扫描结果只负责发现文件和潜在遗漏，不能代替对业务逻辑、页面行为和测试证据的人工核对。
+默认扫描只使用常见命名启发式。项目结构不符合这些约定时，按照 [project-topology.md](references/project-topology.md) 提供临时或项目已有的映射配置，再使用 `--config` 运行。扫描结果只负责发现文件和潜在遗漏，不能代替对业务逻辑、页面行为和测试证据的人工核对。
 
 ## 按事实更新文档
 
@@ -135,6 +145,7 @@ python3 /path/to/living-product-docs/scripts/audit_docs.py /path/to/project --ba
 交付前至少确认：
 
 - 流程核对和入口核对均已完成，或明确说明未覆盖范围；
+- 文档覆盖范围来自已确认的项目拓扑，不是由常见目录名推断；
 - PRD、测试、数据字典和手册之间没有已知的状态、字段或规则冲突；
 - 新增事实有代码、契约、数据库、页面、测试或经确认的产品决策支持；
 - 测试覆盖声明能够对应具体用例或执行证据；

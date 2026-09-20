@@ -8,6 +8,7 @@ change patterns; it does not decide whether a product document is complete.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -19,7 +20,6 @@ from typing import Iterable
 
 
 IGNORED_DIRS = {
-    ".git",
     ".next",
     ".nuxt",
     ".venv",
@@ -57,6 +57,26 @@ VERSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+KNOWN_CATEGORIES = {
+    "api",
+    "behavior",
+    "data_dictionary",
+    "data_structure",
+    "documentation",
+    "interface",
+    "manuals",
+    "product_docs",
+    "source",
+    "tests",
+}
+
+DEFAULT_CONFIG: dict[str, object] = {
+    "use_default_heuristics": True,
+    "use_default_ignores": True,
+    "ignore_patterns": [],
+    "category_patterns": {},
+}
+
 
 @dataclass
 class Finding:
@@ -86,16 +106,98 @@ def normalize(path: str | Path) -> str:
     return normalized
 
 
-def iter_files(project: Path) -> Iterable[str]:
+def normalize_config(config: dict[str, object] | None = None) -> dict[str, object]:
+    if config is None:
+        return {
+            "use_default_heuristics": True,
+            "use_default_ignores": True,
+            "ignore_patterns": [],
+            "category_patterns": {},
+        }
+    if not isinstance(config, dict):
+        raise ValueError("Audit configuration must be a JSON object")
+
+    unknown_keys = set(config) - set(DEFAULT_CONFIG)
+    if unknown_keys:
+        raise ValueError(f"Unknown configuration key: {sorted(unknown_keys)[0]}")
+
+    use_defaults = config.get("use_default_heuristics", True)
+    if not isinstance(use_defaults, bool):
+        raise ValueError("use_default_heuristics must be true or false")
+
+    use_default_ignores = config.get("use_default_ignores", True)
+    if not isinstance(use_default_ignores, bool):
+        raise ValueError("use_default_ignores must be true or false")
+
+    ignore_patterns = config.get("ignore_patterns", [])
+    if not isinstance(ignore_patterns, list) or not all(isinstance(item, str) for item in ignore_patterns):
+        raise ValueError("ignore_patterns must be a list of strings")
+
+    category_patterns = config.get("category_patterns", {})
+    if not isinstance(category_patterns, dict):
+        raise ValueError("category_patterns must be an object")
+
+    normalized_patterns: dict[str, list[str]] = {}
+    for category, patterns in category_patterns.items():
+        if category not in KNOWN_CATEGORIES:
+            raise ValueError(f"Unknown category: {category}")
+        if not isinstance(patterns, list) or not all(isinstance(item, str) for item in patterns):
+            raise ValueError(f"category_patterns.{category} must be a list of strings")
+        normalized_patterns[category] = patterns
+
+    return {
+        "use_default_heuristics": use_defaults,
+        "use_default_ignores": use_default_ignores,
+        "ignore_patterns": ignore_patterns,
+        "category_patterns": normalized_patterns,
+    }
+
+
+def load_config(path: Path) -> dict[str, object]:
+    try:
+        content = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Cannot read audit configuration: {path}: {error}") from error
+    return normalize_config(content)
+
+
+def matches_pattern(path: str, pattern: str) -> bool:
+    normalized_path = normalize(path)
+    normalized_pattern = normalize(pattern)
+    if fnmatch.fnmatchcase(normalized_path.lower(), normalized_pattern.lower()):
+        return True
+    if normalized_pattern.endswith("/**"):
+        root = normalized_pattern[:-3].rstrip("/")
+        return normalized_path.lower() == root.lower() or normalized_path.lower().startswith(f"{root.lower()}/")
+    return False
+
+
+def iter_files(
+    project: Path,
+    ignore_patterns: Iterable[str] = (),
+    use_default_ignores: bool = True,
+) -> Iterable[str]:
+    patterns = tuple(ignore_patterns)
     for root, dirs, files in os.walk(project):
-        dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS)
+        retained_dirs: list[str] = []
+        for directory in sorted(dirs):
+            if directory == ".git" or (use_default_ignores and directory in IGNORED_DIRS):
+                continue
+            relative_dir = normalize((Path(root) / directory).relative_to(project))
+            if any(matches_pattern(relative_dir, pattern) for pattern in patterns):
+                continue
+            retained_dirs.append(directory)
+        dirs[:] = retained_dirs
         for filename in sorted(files):
             full_path = Path(root) / filename
             try:
                 relative = full_path.relative_to(project)
             except ValueError:
                 continue
-            yield normalize(relative)
+            normalized = normalize(relative)
+            if any(matches_pattern(normalized, pattern) for pattern in patterns):
+                continue
+            yield normalized
 
 
 def is_test_file(path: str) -> bool:
@@ -108,7 +210,8 @@ def is_test_file(path: str) -> bool:
     )
 
 
-def classify(path: str) -> set[str]:
+def classify(path: str, config: dict[str, object] | None = None) -> set[str]:
+    normalized_config = normalize_config(config)
     lower = normalize(path).lower()
     suffix = Path(lower).suffix
     parts = set(Path(lower).parts)
@@ -120,33 +223,41 @@ def classify(path: str) -> set[str]:
         categories.add("tests")
     if suffix in SOURCE_EXTENSIONS and not is_test_file(lower):
         categories.add("source")
-    if suffix in DOC_EXTENSIONS and any(
-        token in lower for token in ("requirement", "requirements", "product", "prd", "需求", "产品")
-    ):
-        categories.add("product_docs")
-    if suffix in DOC_EXTENSIONS and any(
-        token in lower for token in ("manual", "handbook", "guide", "playbook", "runbook", "手册", "操作指南")
-    ):
-        categories.add("manuals")
-    if suffix in DOC_EXTENSIONS and any(
-        token in lower for token in ("data-dictionary", "data_dictionary", "dictionary", "数据字典")
-    ):
-        categories.add("data_dictionary")
-    if (
-        any(part in {"migration", "migrations", "schema", "schemas", "models", "entities"} for part in parts)
-        or any(token in lower for token in ("prisma.schema", "schema.sql", "structure.sql"))
-    ):
-        categories.add("data_structure")
-    if any(part in {"route", "routes", "controller", "controllers", "api", "apis"} for part in parts) or any(
-        token in lower for token in ("openapi", "swagger", "asyncapi")
-    ):
-        categories.add("api")
-    if suffix in {".tsx", ".jsx", ".vue", ".svelte", ".dart", ".swift"} or any(
-        part in {"pages", "screens", "views", "components"} for part in parts
-    ):
-        categories.add("interface")
-    if any(part in {"services", "jobs", "workers", "commands", "handlers", "domain"} for part in parts):
-        categories.add("behavior")
+
+    if normalized_config["use_default_heuristics"]:
+        if suffix in DOC_EXTENSIONS and any(
+            token in lower for token in ("requirement", "requirements", "product", "prd", "需求", "产品")
+        ):
+            categories.add("product_docs")
+        if suffix in DOC_EXTENSIONS and any(
+            token in lower for token in ("manual", "handbook", "guide", "playbook", "runbook", "手册", "操作指南")
+        ):
+            categories.add("manuals")
+        if suffix in DOC_EXTENSIONS and any(
+            token in lower for token in ("data-dictionary", "data_dictionary", "dictionary", "数据字典")
+        ):
+            categories.add("data_dictionary")
+        if (
+            any(part in {"migration", "migrations", "schema", "schemas", "models", "entities"} for part in parts)
+            or any(token in lower for token in ("prisma.schema", "schema.sql", "structure.sql"))
+        ):
+            categories.add("data_structure")
+        if any(part in {"route", "routes", "controller", "controllers", "api", "apis"} for part in parts) or any(
+            token in lower for token in ("openapi", "swagger", "asyncapi")
+        ):
+            categories.add("api")
+        if suffix in {".tsx", ".jsx", ".vue", ".svelte", ".dart", ".swift"} or any(
+            part in {"pages", "screens", "views", "components"} for part in parts
+        ):
+            categories.add("interface")
+        if any(part in {"services", "jobs", "workers", "commands", "handlers", "domain"} for part in parts):
+            categories.add("behavior")
+
+    category_patterns = normalized_config["category_patterns"]
+    assert isinstance(category_patterns, dict)
+    for category, patterns in category_patterns.items():
+        if any(matches_pattern(lower, pattern) for pattern in patterns):
+            categories.add(category)
 
     return categories
 
@@ -194,10 +305,10 @@ def has_version_record(project: Path, relative: str) -> bool:
     return VERSION_PATTERN.search(content[:8_000]) is not None
 
 
-def bucket(paths: Iterable[str]) -> dict[str, list[str]]:
+def bucket(paths: Iterable[str], config: dict[str, object] | None = None) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for path in paths:
-        for category in classify(path):
+        for category in classify(path, config):
             result.setdefault(category, []).append(path)
     return {key: sorted(set(values)) for key, values in sorted(result.items())}
 
@@ -236,11 +347,24 @@ def build_findings(changed: dict[str, list[str]]) -> list[Finding]:
     return findings
 
 
-def audit(project: Path, base: str | None) -> dict[str, object]:
-    files = sorted(iter_files(project))
-    changed_files = tracked_changes(project, base)
-    inventory = bucket(files)
-    changed = bucket(changed_files)
+def audit(
+    project: Path,
+    base: str | None,
+    config: dict[str, object] | None = None,
+) -> dict[str, object]:
+    normalized_config = normalize_config(config)
+    ignore_patterns = normalized_config["ignore_patterns"]
+    assert isinstance(ignore_patterns, list)
+    use_default_ignores = normalized_config["use_default_ignores"]
+    assert isinstance(use_default_ignores, bool)
+    files = sorted(iter_files(project, ignore_patterns, use_default_ignores))
+    changed_files = [
+        path
+        for path in tracked_changes(project, base)
+        if not any(matches_pattern(path, pattern) for pattern in ignore_patterns)
+    ]
+    inventory = bucket(files, normalized_config)
+    changed = bucket(changed_files, normalized_config)
 
     long_lived_docs = sorted(
         set(inventory.get("product_docs", []))
@@ -265,6 +389,7 @@ def audit(project: Path, base: str | None) -> dict[str, object]:
     return {
         "project": str(project),
         "git": {"branch": branch or None, "head": head or None, "base": base},
+        "configuration": normalized_config,
         "changed_files": changed_files,
         "changed_categories": changed,
         "inventory": inventory,
@@ -281,6 +406,7 @@ def render_markdown(report: dict[str, object]) -> str:
         f"- Branch: `{git['branch'] or 'unknown'}`",
         f"- HEAD: `{git['head'] or 'unknown'}`",
         f"- Base: `{git['base'] or 'working tree only'}`",
+        f"- Default heuristics: `{'enabled' if report['configuration']['use_default_heuristics'] else 'disabled'}`",
         "",
         "## Changed files",
         "",
@@ -316,6 +442,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", type=Path, help="Project directory to inspect")
     parser.add_argument("--base", help="Git base ref used for committed-change comparison")
+    parser.add_argument("--config", type=Path, help="Optional JSON file with project-specific topology mappings")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when warning findings exist")
     return parser.parse_args()
@@ -329,8 +456,9 @@ def main() -> int:
         return 2
 
     try:
-        report = audit(project, args.base)
-    except RuntimeError as error:
+        config = load_config(args.config.expanduser().resolve()) if args.config else None
+        report = audit(project, args.base, config)
+    except (RuntimeError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
 
