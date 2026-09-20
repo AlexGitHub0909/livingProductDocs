@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "audit_docs.py"
@@ -24,7 +25,18 @@ class AuditDocsTest(unittest.TestCase):
         self.assertIn("data_structure", audit_docs.classify("db/migrations/001_add_status.sql"))
         self.assertIn("data_dictionary", audit_docs.classify("docs/data-dictionary.md"))
         self.assertIn("manuals", audit_docs.classify("docs/user-manual.md"))
+        self.assertIn("manuals", audit_docs.classify("knowledge/guides/account.md"))
         self.assertNotIn("interface", audit_docs.classify("app/Services/OrderService.php"))
+
+    def test_product_document_keywords_use_semantic_boundaries(self) -> None:
+        dependency_manifest = audit_docs.classify("backend/requirements.txt")
+        production_runbook = audit_docs.classify("docs/specs/production-runbook.md")
+        productivity_notes = audit_docs.classify("docs/productivity-notes.md")
+
+        self.assertNotIn("product_docs", dependency_manifest)
+        self.assertNotIn("product_docs", production_runbook)
+        self.assertIn("manuals", production_runbook)
+        self.assertNotIn("product_docs", productivity_notes)
 
     def test_normalize_preserves_dot_prefixed_directories(self) -> None:
         self.assertEqual(".github/workflows/check.yml", audit_docs.normalize(".github/workflows/check.yml"))
@@ -44,6 +56,17 @@ class AuditDocsTest(unittest.TestCase):
             document = project / "docs" / "requirements.md"
             document.parent.mkdir()
             document.write_text("# Requirements\n" + ("content\n" * 1_200) + "## Changelog\n", encoding="utf-8")
+            self.assertFalse(audit_docs.has_version_record(project, "docs/requirements.md"))
+
+    def test_changelog_mention_is_not_a_version_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            document = project / "docs" / "requirements.md"
+            document.parent.mkdir()
+            document.write_text(
+                "# Requirements\n\nFor release details, see the changelog in another repository.\n",
+                encoding="utf-8",
+            )
             self.assertFalse(audit_docs.has_version_record(project, "docs/requirements.md"))
 
     def test_warns_when_data_changes_without_dictionary_or_tests(self) -> None:
@@ -87,9 +110,14 @@ class AuditDocsTest(unittest.TestCase):
             untracked = project / "src" / "new page.tsx"
             untracked.parent.mkdir(parents=True)
             untracked.write_text("export default function Page() { return null }\n", encoding="utf-8")
+            leading_space = project / " leading page.tsx"
+            leading_space.write_text("export default function Page() { return null }\n", encoding="utf-8")
 
             changed = audit_docs.tracked_changes(project, None)
-            self.assertEqual(["docs/user guide.md", "src/new page.tsx"], changed)
+            self.assertEqual(
+                {" leading page.tsx", "docs/user guide.md", "src/new page.tsx"},
+                set(changed),
+            )
 
     def test_audit_works_outside_a_git_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -102,6 +130,21 @@ class AuditDocsTest(unittest.TestCase):
             self.assertEqual([], report["changed_files"])
             self.assertIn("product_docs", report["inventory"])
             self.assertIsNone(report["git"]["head"])
+
+    def test_audit_reports_directory_scan_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+
+            def failing_walk(*args, **kwargs):
+                kwargs["onerror"](PermissionError(13, "Permission denied", str(project / "restricted")))
+                return iter(())
+
+            with mock.patch.object(audit_docs.os, "walk", side_effect=failing_walk):
+                report = audit_docs.audit(project, None)
+
+            codes = {item["code"] for item in report["findings"]}
+            self.assertIn("SCAN_INCOMPLETE", codes)
+            self.assertEqual(1, len(report["scan_errors"]))
 
     def test_custom_patterns_support_nonstandard_project_topology(self) -> None:
         config = {

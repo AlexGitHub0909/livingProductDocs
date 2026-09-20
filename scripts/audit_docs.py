@@ -52,8 +52,30 @@ SOURCE_EXTENSIONS = {
     ".vue",
 }
 
-VERSION_PATTERN = re.compile(
-    r"版本(?:更新|变更)?记录|变更记录|修订记录|version\s+history|revision\s+history|changelog",
+VERSION_HEADING_PATTERN = re.compile(
+    r"^\s{0,3}(?:(?:#{1,6})\s+|\*\*\s*)?"
+    r"(?:版本(?:更新|变更)?记录|变更记录|修订记录|version\s+history|revision\s+history|changelog)"
+    r"(?:\s*\*\*)?\s*(?::.*)?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+VERSION_TABLE_PATTERN = re.compile(
+    r"^\s*\|[^\n]*(?:版本|version|revision)[^\n]*\|[^\n]*(?:日期|date|更新范围|changes?)[^\n]*\|",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+PRODUCT_DOC_TERM_PATTERN = re.compile(
+    r"(?:^|[/_.\s-])(?:requirements?|product|prd)(?=$|[/_.\s-])",
+    re.IGNORECASE,
+)
+
+MANUAL_TERM_PATTERN = re.compile(
+    r"(?:^|[/_.\s-])(?:manuals?|handbooks?|guides?|playbooks?|runbooks?)(?=$|[/_.\s-])",
+    re.IGNORECASE,
+)
+
+PYTHON_REQUIREMENTS_PATTERN = re.compile(
+    r"requirements(?:[-_.][a-z0-9]+)*\.txt",
     re.IGNORECASE,
 )
 
@@ -96,7 +118,7 @@ def run_git(project: Path, *args: str) -> tuple[int, str]:
         )
     except FileNotFoundError:
         return 127, ""
-    return process.returncode, process.stdout.strip()
+    return process.returncode, process.stdout
 
 
 def normalize(path: str | Path) -> str:
@@ -176,9 +198,22 @@ def iter_files(
     project: Path,
     ignore_patterns: Iterable[str] = (),
     use_default_ignores: bool = True,
+    scan_errors: list[str] | None = None,
 ) -> Iterable[str]:
     patterns = tuple(ignore_patterns)
-    for root, dirs, files in os.walk(project):
+
+    def record_error(error: OSError) -> None:
+        if scan_errors is None:
+            return
+        target = error.filename or "unknown path"
+        try:
+            display_target = normalize(Path(target).relative_to(project))
+        except (TypeError, ValueError):
+            display_target = normalize(target)
+        reason = error.strerror or str(error)
+        scan_errors.append(f"{display_target}: {reason}")
+
+    for root, dirs, files in os.walk(project, onerror=record_error):
         retained_dirs: list[str] = []
         for directory in sorted(dirs):
             if directory == ".git" or (use_default_ignores and directory in IGNORED_DIRS):
@@ -225,12 +260,13 @@ def classify(path: str, config: dict[str, object] | None = None) -> set[str]:
         categories.add("source")
 
     if normalized_config["use_default_heuristics"]:
-        if suffix in DOC_EXTENSIONS and any(
-            token in lower for token in ("requirement", "requirements", "product", "prd", "需求", "产品")
+        is_python_requirements = PYTHON_REQUIREMENTS_PATTERN.fullmatch(Path(lower).name) is not None
+        if suffix in DOC_EXTENSIONS and not is_python_requirements and (
+            PRODUCT_DOC_TERM_PATTERN.search(lower) is not None or any(token in lower for token in ("需求", "产品"))
         ):
             categories.add("product_docs")
-        if suffix in DOC_EXTENSIONS and any(
-            token in lower for token in ("manual", "handbook", "guide", "playbook", "runbook", "手册", "操作指南")
+        if suffix in DOC_EXTENSIONS and (
+            MANUAL_TERM_PATTERN.search(lower) is not None or any(token in lower for token in ("手册", "操作指南"))
         ):
             categories.add("manuals")
         if suffix in DOC_EXTENSIONS and any(
@@ -302,7 +338,11 @@ def has_version_record(project: Path, relative: str) -> bool:
         content = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    return VERSION_PATTERN.search(content[:8_000]) is not None
+    document_head = content[:8_000]
+    return (
+        VERSION_HEADING_PATTERN.search(document_head) is not None
+        or VERSION_TABLE_PATTERN.search(document_head) is not None
+    )
 
 
 def bucket(paths: Iterable[str], config: dict[str, object] | None = None) -> dict[str, list[str]]:
@@ -357,7 +397,8 @@ def audit(
     assert isinstance(ignore_patterns, list)
     use_default_ignores = normalized_config["use_default_ignores"]
     assert isinstance(use_default_ignores, bool)
-    files = sorted(iter_files(project, ignore_patterns, use_default_ignores))
+    scan_errors: list[str] = []
+    files = sorted(iter_files(project, ignore_patterns, use_default_ignores, scan_errors))
     changed_files = [
         path
         for path in tracked_changes(project, base)
@@ -375,8 +416,19 @@ def audit(
 
     _, branch = run_git(project, "branch", "--show-current")
     _, head = run_git(project, "rev-parse", "HEAD")
+    branch = branch.strip()
+    head = head.strip()
 
     findings = build_findings(changed)
+    if scan_errors:
+        findings.insert(
+            0,
+            Finding(
+                "warning",
+                "SCAN_INCOMPLETE",
+                f"Could not read {len(scan_errors)} path(s); the evidence inventory is incomplete.",
+            ),
+        )
     for path in missing_version:
         findings.append(
             Finding(
@@ -390,6 +442,7 @@ def audit(
         "project": str(project),
         "git": {"branch": branch or None, "head": head or None, "base": base},
         "configuration": normalized_config,
+        "scan_errors": scan_errors,
         "changed_files": changed_files,
         "changed_categories": changed,
         "inventory": inventory,
@@ -424,6 +477,13 @@ def render_markdown(report: dict[str, object]) -> str:
         lines.extend(f"- **{item['level'].upper()} {item['code']}**: {item['message']}" for item in findings)
     else:
         lines.append("- No structural synchronization warning detected.")
+
+    scan_errors = report["scan_errors"]
+    if scan_errors:
+        lines.extend(["", "## Scan errors", ""])
+        lines.extend(f"- `{error}`" for error in scan_errors[:20])
+        if len(scan_errors) > 20:
+            lines.append(f"- ... {len(scan_errors) - 20} more")
 
     lines.extend(["", "## Evidence inventory", ""])
     inventory = report["inventory"]
