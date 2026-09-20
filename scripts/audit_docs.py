@@ -66,18 +66,24 @@ class Finding:
 
 
 def run_git(project: Path, *args: str) -> tuple[int, str]:
-    process = subprocess.run(
-        ["git", "-C", str(project), *args],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        process = subprocess.run(
+            ["git", "-C", str(project), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError:
+        return 127, ""
     return process.returncode, process.stdout.strip()
 
 
 def normalize(path: str | Path) -> str:
-    return str(path).replace(os.sep, "/").lstrip("./")
+    normalized = str(path).replace(os.sep, "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def iter_files(project: Path) -> Iterable[str]:
@@ -136,7 +142,7 @@ def classify(path: str) -> set[str]:
     ):
         categories.add("api")
     if suffix in {".tsx", ".jsx", ".vue", ".svelte", ".dart", ".swift"} or any(
-        part in {"pages", "screens", "views", "components", "app"} for part in parts
+        part in {"pages", "screens", "views", "components"} for part in parts
     ):
         categories.add("interface")
     if any(part in {"services", "jobs", "workers", "commands", "handlers", "domain"} for part in parts):
@@ -149,20 +155,28 @@ def tracked_changes(project: Path, base: str | None) -> list[str]:
     changed: set[str] = set()
 
     if base:
-        code, output = run_git(project, "diff", "--name-only", f"{base}...HEAD")
+        code, output = run_git(project, "diff", "--name-only", "-z", f"{base}...HEAD")
         if code != 0:
             raise RuntimeError(f"Cannot compare with base ref: {base}")
-        changed.update(filter(None, output.splitlines()))
+        changed.update(filter(None, output.split("\0")))
 
-    code, output = run_git(project, "status", "--porcelain=v1", "--untracked-files=all")
+    code, output = run_git(project, "diff", "--name-only", "-z", "HEAD")
     if code == 0:
-        for line in output.splitlines():
-            if len(line) < 4:
-                continue
-            candidate = line[3:]
-            if " -> " in candidate:
-                candidate = candidate.split(" -> ", 1)[1]
-            changed.add(candidate.strip('"'))
+        changed.update(filter(None, output.split("\0")))
+    else:
+        # Unborn repositories have no HEAD yet. Read staged and unstaged paths
+        # independently so the scanner remains useful during initial setup.
+        for args in (
+            ("diff", "--cached", "--name-only", "-z"),
+            ("diff", "--name-only", "-z"),
+        ):
+            fallback_code, fallback_output = run_git(project, *args)
+            if fallback_code == 0:
+                changed.update(filter(None, fallback_output.split("\0")))
+
+    code, output = run_git(project, "ls-files", "--others", "--exclude-standard", "-z")
+    if code == 0:
+        changed.update(filter(None, output.split("\0")))
 
     return sorted(normalize(path) for path in changed if path)
 
@@ -177,7 +191,7 @@ def has_version_record(project: Path, relative: str) -> bool:
         content = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    return VERSION_PATTERN.search(content[:30_000]) is not None
+    return VERSION_PATTERN.search(content[:8_000]) is not None
 
 
 def bucket(paths: Iterable[str]) -> dict[str, list[str]]:
